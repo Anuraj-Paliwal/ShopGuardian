@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Transactions</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f7fa;
+        }
+
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .navbar h1 {
+            font-size: 1.5rem;
+        }
+
+        .navbar a {
+            color: white;
+            text-decoration: none;
+            margin-left: 20px;
+            padding: 8px 20px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 20px;
+            transition: all 0.3s;
+        }
+
+        .navbar a:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+
+        .card h2 {
+            color: #333;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 1rem;
+            color: #666;
+            transition: all 0.3s;
+            border-bottom: 3px solid transparent;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #666;
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: border 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            padding: 14px 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        .status-badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .status-genuine {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-fraudulent {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .probability-bar {
+            height: 20px;
+            background: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .probability-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #ffc107, #dc3545);
+            transition: width 0.5s;
+        }
+
+        .success-message {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+            border-left: 4px solid #28a745;
+        }
+
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .collapsible {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .collapsible:hover {
+            background: #e9ecef;
+        }
+
+        .collapsible-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s;
+        }
+
+        .collapsible-content.open {
+            max-height: 2000px;
+        }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>💳 Transaction Manager</h1>
+        <div>
+            <span>Welcome, <strong>{{ username }}</strong>!</span>
+            <a href="/logout">Logout</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Success Message -->
+        <div class="success-message" id="successMessage"></div>
+
+        <!-- New Transaction Card -->
+        <div class="card">
+            <h2>📝 New Transaction</h2>
+            
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('simple')">Simple Mode</button>
+                <button class="tab" onclick="switchTab('advanced')">Advanced Mode (All Features)</button>
+            </div>
+
+            <!-- Simple Mode -->
+            <div id="simple-tab" class="tab-content active">
+                <div class="info-box">
+                    <strong>ℹ️ Quick Transaction:</strong> Enter basic details and let the AI predict fraud automatically.
+                </div>
+                <form id="simpleForm" class="form-grid">
+                    <div class="form-group">
+                        <label>Amount ($) *</label>
+                        <input type="number" id="simple_amount" step="0.01" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Time (seconds from start) *</label>
+                        <input type="number" id="simple_time" value="0" required>
+                    </div>
+                </form>
+                <button class="btn" onclick="submitSimpleTransaction()">Submit Transaction</button>
+            </div>
+
+            <!-- Advanced Mode -->
+            <div id="advanced-tab" class="tab-content">
+                <div class="info-box">
+                    <strong>⚙️ Advanced Mode:</strong> Provide all PCA features (V1-V28) for precise fraud detection.
+                </div>
+                
+                <div class="collapsible" onclick="toggleCollapsible(this)">
+                    <strong>▼ Basic Information</strong>
+                </div>
+                <div class="collapsible-content open">
+                    <form class="form-grid">
+                        <div class="form-group">
+                            <label>Time (seconds) *</label>
+                            <input type="number" id="Time" value="0" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Amount ($) *</label>
+                            <input type="number" id="Amount" step="0.01" required>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="collapsible" onclick="toggleCollapsible(this)">
+                    <strong>▶ PCA Features (V1-V28)</strong>
+                </div>
+                <div class="collapsible-content">
+                    <form class="form-grid" id="pcaForm">
+                        <!-- V1-V28 will be generated by JavaScript -->
+                    </form>
+                </div>
+
+                <button class="btn btn-secondary" onclick="submitAdvancedTransaction()">Submit Advanced Transaction</button>
+            </div>
+        </div>
+
+        <!-- Transaction History -->
+        <div class="card">
+            <h2>📊 Transaction History</h2>
+            <table id="transactionTable">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Transaction ID</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Fraud Probability</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Generate V1-V28 fields
+        const pcaForm = document.getElementById('pcaForm');
+        for (let i = 1; i <= 28; i++) {
+            pcaForm.innerHTML += `
+                <div class="form-group">
+                    <label>V${i}</label>
+                    <input type="number" id="V${i}" step="any" value="0">
+                </div>
+            `;
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(`${tab}-tab`).classList.add('active');
+        }
+
+        function toggleCollapsible(element) {
+            const content = element.nextElementSibling;
+            content.classList.toggle('open');
+            element.querySelector('strong').textContent = 
+                content.classList.contains('open') ? '▼ ' + element.querySelector('strong').textContent.substring(2) :
+                '▶ ' + element.querySelector('strong').textContent.substring(2);
+        }
+
+        async function submitSimpleTransaction() {
+            const data = {
+                Time: parseFloat(document.getElementById('simple_time').value),
+                Amount: parseFloat(document.getElementById('simple_amount').value)
+            };
+
+            // Add V1-V28 as zeros (model will still work with just Amount and Time)
+            for (let i = 1; i <= 28; i++) {
+                data[`V${i}`] = 0;
+            }
+
+            await submitTransaction(data);
+        }
+
+        async function submitAdvancedTransaction() {
+            const data = {
+                Time: parseFloat(document.getElementById('Time').value),
+                Amount: parseFloat(document.getElementById('Amount').value)
+            };
+
+            // Collect all V features
+            for (let i = 1; i <= 28; i++) {
+                data[`V${i}`] = parseFloat(document.getElementById(`V${i}`).value) || 0;
+            }
+
+            await submitTransaction(data);
+        }
+
+        async function submitTransaction(data) {
+            try {
+                const response = await fetch('/api/transaction', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    const msg = document.getElementById('successMessage');
+                    const fraudStatus = result.label === 'fraudulent' ? 
+                        `⚠️ FRAUD DETECTED (${(result.fraud_probability * 100).toFixed(1)}% probability)` :
+                        `✅ Transaction Approved (${(result.fraud_probability * 100).toFixed(1)}% fraud risk)`;
+                    
+                    msg.innerHTML = `
+                        <strong>Transaction Submitted Successfully!</strong><br>
+                        ID: ${result.transaction_id}<br>
+                        Status: ${fraudStatus}
+                    `;
+                    msg.style.display = 'block';
+                    
+                    // Reset forms
+                    document.getElementById('simpleForm').reset();
+                    
+                    loadTransactions();
+                    setTimeout(() => { msg.style.display = 'none'; }, 10000);
+                }
+            } catch (error) {
+                alert('Error submitting transaction: ' + error.message);
+            }
+        }
+
+        async function loadTransactions() {
+            try {
+                const response = await fetch('/api/transactions');
+                const transactions = await response.json();
+                
+                const tbody = document.querySelector('#transactionTable tbody');
+                tbody.innerHTML = '';
+                
+                transactions.reverse().slice(0, 50).forEach(tx => {
+                    const fraudProb = (tx.fraud_probability || 0) * 100;
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${new Date(tx.timestamp).toLocaleString()}</td>
+                        <td>${tx.transaction_id.substring(0, 8)}...</td>
+                        <td>$${parseFloat(tx.Amount).toFixed(2)}</td>
+                        <td><span class="status-badge status-${tx.label}">${tx.label.toUpperCase()}</span></td>
+                        <td>
+                            <div class="probability-bar">
+                                <div class="probability-fill" style="width: ${fraudProb}%"></div>
+                            </div>
+                            ${fraudProb.toFixed(1)}%
+                        </td>
+                        <td><button onclick="viewDetails('${tx.transaction_id}')">View</button></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (error) {
+                console.error('Error loading transactions:', error);
+            }
+        }
+
+        function viewDetails(txId) {
+            alert(`Transaction details for ${txId}\n(Feature coming soon)`);
+        }
+
+        // Auto-refresh
+        loadTransactions();
+        setInterval(loadTransactions, 5000);
+    </script>
+</body>
+</html>

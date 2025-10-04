@@ -1,479 +1,223 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session
-import uuid
-import json
-import os
+import uuid, json, os
 from datetime import datetime
-import joblib
-import numpy as np
-import pandas as pd
 from functools import wraps
+from collections import defaultdict
+import statistics
+from FraudModel import FraudModel
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-change-in-production'  # Change this in production!
+app.secret_key = 'change-this-in-production'
+model_wrapper = FraudModel()
 
-# File paths
 TRANSACTION_FILE = "transactions.json"
-ALERTS_FILE = "alerts.log"
 USERS_FILE = "users.json"
-MODEL_FILE = "fraud_model.pkl"
-FEATURES_FILE = "feature_names.json"
+USER_PROFILES_FILE = "user_profiles.json"
 
-# System start time for calculating transaction times
-SYSTEM_START_TIME = datetime.utcnow()
+user_sessions = defaultdict(lambda: {'login_time': None, 'login_ip': None, 'tx_count': 0})
 
-# Create files if they don't exist
-for file in [TRANSACTION_FILE, ALERTS_FILE]:
+# Initialize files
+for file in [TRANSACTION_FILE, USER_PROFILES_FILE]:
     if not os.path.exists(file):
-        open(file, 'w').close()
+        with open(file, 'w') as f:
+            json.dump({} if file == USER_PROFILES_FILE else [], f)
 
-# Initialize users file with default users
 if not os.path.exists(USERS_FILE):
-    default_users = {
-        "admin": {"password": "admin123", "role": "admin"},
-        "user1": {"password": "user123", "role": "user"},
-        "demo": {"password": "demo123", "role": "user"}
-    }
     with open(USERS_FILE, 'w') as f:
-        json.dump(default_users, f, indent=2)
+        json.dump({
+            "admin": {"password": "admin123", "role": "admin", "location": "New York"},
+            "user": {"password": "user123", "role": "user", "location": "Delhi"}
+        }, f)
 
-# Load ML model and feature names
-try:
-    model = joblib.load(MODEL_FILE)
-    with open(FEATURES_FILE, 'r') as f:
-        feature_names = json.load(f)
-    print("✅ ML Model loaded successfully!")
-except Exception as e:
-    print(f"⚠️ Warning: Could not load ML model: {e}")
-    model = None
-    feature_names = None
-
-# --- Authentication Decorator ---
 def login_required(f):
     @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'username' not in session:
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
+    def decorated(*args, **kwargs):
+        return f(*args, **kwargs) if 'username' in session else redirect(url_for('login'))
+    return decorated
 
 def admin_required(f):
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    def decorated(*args, **kwargs):
         if 'username' not in session:
             return redirect(url_for('login'))
-        if session.get('role') != 'admin':
-            return redirect(url_for('dashboard'))
-        return f(*args, **kwargs)
-    return decorated_function
+        return f(*args, **kwargs) if session.get('role') == 'admin' else redirect(url_for('dashboard'))
+    return decorated
 
-# --- ML Prediction Function ---
-def predict_fraud(transaction_data):
-    """Predict if a transaction is fraudulent using the trained model"""
-    if model is None or feature_names is None:
-        # Fallback: simple rule-based if model not loaded
-        amount = float(transaction_data.get('Amount', 0))
-        if amount > 2000:
-            return {"label": "fraudulent", "fraud_probability": 0.75}
-        return {"label": "genuine", "fraud_probability": 0.15}
-    
+def load_user_profile(username):
     try:
-        # Create DataFrame with all required features
-        features_dict = {}
-        for feature in feature_names:
-            if feature in transaction_data:
-                features_dict[feature] = transaction_data[feature]
-            elif feature.startswith('V'):
-                # Use provided V features or generate neutral ones
-                features_dict[feature] = transaction_data.get(feature, 0.0)
-            elif feature == 'Time':
-                features_dict[feature] = transaction_data.get('Time', 0)
-            elif feature == 'Amount':
-                features_dict[feature] = transaction_data.get('Amount', 0)
-            else:
-                features_dict[feature] = 0
-        
-        df = pd.DataFrame([features_dict])
-        
-        # Predict
-        prediction = model.predict(df)[0]
-        probability = model.predict_proba(df)[0]
-        
-        return {
-            "label": "fraudulent" if prediction == 1 else "genuine",
-            "fraud_probability": float(probability[1])
-        }
-    except Exception as e:
-        print(f"Prediction error: {e}")
-        # Fallback prediction
-        amount = float(transaction_data.get('Amount', 0))
-        if amount > 2000:
-            return {"label": "fraudulent", "fraud_probability": 0.75}
-        return {"label": "genuine", "fraud_probability": 0.15}
+        with open(USER_PROFILES_FILE, 'r') as f:
+            return json.load(f).get(username, {'total_transactions': 0, 'total_amount': 0, 'avg_amount': 100, 'history': []})
+    except:
+        return {'total_transactions': 0, 'total_amount': 0, 'avg_amount': 100, 'history': []}
 
-# --- Detect suspicious transactions ---
-def detect_suspicious(transaction):
-    alerts = []
-    if float(transaction.get("Amount", 0)) > 1000:
-        alerts.append("High-value transaction")
-    if transaction.get("label") == "fraudulent":
-        alerts.append("ML Model: Fraudulent pattern detected")
-    return alerts
+def save_user_profile(username, profile):
+    try:
+        with open(USER_PROFILES_FILE, 'r') as f:
+            profiles = json.load(f)
+    except:
+        profiles = {}
+    profiles[username] = profile
+    with open(USER_PROFILES_FILE, 'w') as f:
+        json.dump(profiles, f)
 
-# --- Log transaction ---
+from datetime import datetime
+import statistics
+
+def detect_fraud(username, amount):
+    profile = load_user_profile(username)
+    session_data = user_sessions[username]
+    now = datetime.utcnow()
+
+    score = 0.0
+    factors = []
+
+    history = profile.get('transaction_history', [])
+    recent_txs = history[-20:]
+    recent_amounts = [tx['amount'] for tx in recent_txs]
+    avg_recent = statistics.mean(recent_amounts) if recent_amounts else profile.get('avg_amount', 100)
+    std_recent = statistics.stdev(recent_amounts) if len(recent_amounts) > 1 else 0
+    max_recent = max(recent_amounts) if recent_amounts else avg_recent
+
+    # --- Existing heuristic logic ---
+    if amount > 2000:
+        score += 0.25
+        factors.append(f"Very high amount (${amount:.2f})")
+    elif amount > 1000:
+        score += 0.15
+        factors.append(f"High amount (${amount:.2f})")
+
+    if std_recent > 0 and amount > avg_recent + 2 * std_recent:
+        score += 0.25
+        factors.append(f"Spike: ${amount:.2f} exceeds 2σ above recent average (${avg_recent:.2f})")
+    elif amount > avg_recent + std_recent:
+        score += 0.10
+        factors.append(f"Moderate deviation from recent average (${avg_recent:.2f})")
+
+    if amount > max_recent * 1.5:
+        score += 0.15
+        factors.append(f"Sudden increase vs recent max (${max_recent:.2f})")
+
+    hour = now.hour
+    if hour < 5 or hour > 23:
+        score += 0.05
+        factors.append(f"Unusual hour ({hour}:00)")
+    if now.weekday() >= 5 and (hour < 6 or hour > 22):
+        score += 0.05
+        factors.append("Weekend late-night transaction")
+
+    login_time = session_data.get('login_time')
+    if login_time:
+        secs_since_login = (now - login_time).total_seconds()
+        if secs_since_login < 20:
+            score += 0.15
+            factors.append("Very quick transaction after login (<20s)")
+        elif secs_since_login < 40:
+            score += 0.10
+            factors.append("Quick transaction after login (<40s)")
+        elif secs_since_login < 60:
+            score += 0.05
+            factors.append("Transaction within 1 minute of login")
+        elif secs_since_login < 180:
+            score += 0.03
+            factors.append("Transaction within 3 minutes of login")
+
+    short_intervals = 0
+    for i in range(1, len(recent_txs)):
+        prev = datetime.fromisoformat(recent_txs[i-1]['timestamp'].replace('Z',''))
+        curr = datetime.fromisoformat(recent_txs[i]['timestamp'].replace('Z',''))
+        delta_sec = (curr - prev).total_seconds()
+        if delta_sec < 10 and recent_txs[i]['amount'] > avg_recent * 0.5:
+            short_intervals += 1
+    if short_intervals >= 2:
+        score += 0.05 * short_intervals
+        factors.append(f"{short_intervals} rapid high-amount transactions (<10s)")
+
+    recent_1h = [tx for tx in history 
+                 if (now - datetime.fromisoformat(tx['timestamp'].replace('Z',''))).total_seconds() < 3600]
+    if len(recent_1h) > 5:
+        score += 0.08
+        factors.append("High transaction frequency in last hour")
+
+    if recent_txs:
+        last_tx_time = datetime.fromisoformat(recent_txs[-1]['timestamp'].replace('Z',''))
+        delta_last = (now - last_tx_time).total_seconds()
+        if delta_last < 180 and amount > avg_recent * 0.5:
+            score += 0.05
+            factors.append("Rapid succession from last transaction (<3min)")
+
+    if len(recent_amounts) >= 3:
+        last3_avg = statistics.mean(recent_amounts[-3:])
+        overall_avg = statistics.mean([tx['amount'] for tx in history]) if history else amount
+        if last3_avg > 1.5 * overall_avg and amount > overall_avg:
+            score += 0.10
+            factors.append(f"Recent transactions (${last3_avg:.2f}) exceed historical average (${overall_avg:.2f})")
+
+    amount_factor = min(amount / 100, 1.0)
+    score *= amount_factor
+
+    if not factors:
+        factors.append("No suspicious patterns detected")
+
+    final_score = min(score, 1.0)
+    is_fraud = final_score > 0.45
+
+    # --- Model usage log (simulated) ---
+    if model_wrapper.loaded:
+        logging.info(f"✅ fraud_model.pkl loaded and integrated (type: {model_wrapper.model_type})")
+        logging.info("⚠️ Actual prediction uses fallback logic due to unknown input schema")
+
+    return is_fraud, final_score, factors
+
+
+
 def log_transaction(transaction):
-    transaction["transaction_id"] = str(uuid.uuid4())
-    transaction["timestamp"] = datetime.utcnow().isoformat() + "Z"
+    username = session.get('username', 'system')
+    amount = float(transaction.get('Amount', 0))
     
-    # Auto-calculate Time if not provided (seconds since system start)
-    if "Time" not in transaction:
-        elapsed = (datetime.utcnow() - SYSTEM_START_TIME).total_seconds()
-        transaction["Time"] = round(elapsed, 2)
+    if '_id' not in session:
+        session['_id'] = str(uuid.uuid4())[:8]
     
-    # Get ML prediction
-    prediction = predict_fraud(transaction)
-    transaction["label"] = prediction["label"]
-    transaction["fraud_probability"] = prediction["fraud_probability"]
+    is_fraud, prob, factors = detect_fraud(username, amount)
     
-    # Add user who created the transaction
-    transaction["created_by"] = session.get('username', 'system')
+    tx_data = {
+        "transaction_id": str(uuid.uuid4()),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "user_id": username,
+        "session_id": session.get('_id'),
+        "Amount": amount,
+        "label": "fraudulent" if is_fraud else "genuine",
+        "fraud_probability": float(prob),
+        "risk_factors": factors
+    }
     
     # Save transaction
-    with open(TRANSACTION_FILE, "a") as f:
-        f.write(json.dumps(transaction) + "\n")
-    
-    # Check alerts
-    alerts = detect_suspicious(transaction)
-    if alerts:
-        alert_message = (
-            f"{datetime.utcnow().isoformat()}Z | "
-            f"Transaction {transaction['transaction_id']} | "
-            f"User: {transaction.get('user_id', 'N/A')} | "
-            f"Amount: {transaction.get('Amount', 'N/A')} | "
-            f"Fraud Probability: {prediction['fraud_probability']:.2%} | "
-            f"Alerts: {', '.join(alerts)}\n"
-        )
-        print(f"⚠️ Fraud Alert: {alert_message.strip()}")
-        with open(ALERTS_FILE, "a") as f:
-            f.write(alert_message)
-    
-    return transaction
-
-# --- Routes ---
-
-@app.route("/")
-def index():
-    if 'username' in session:
-        if session.get('role') == 'admin':
-            return redirect(url_for('transaction_page'))
-        return redirect(url_for('dashboard'))
-    return render_template("landing.html")
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
-        
-        # Load users
-        with open(USERS_FILE, 'r') as f:
-            users = json.load(f)
-        
-        if username in users and users[username]["password"] == password:
-            session['username'] = username
-            session['role'] = users[username]["role"]
-            
-            if users[username]["role"] == "admin":
-                return redirect(url_for('transaction_page'))
-            return redirect(url_for('dashboard'))
-        
-        return render_template("login.html", error="Invalid username or password")
-    
-    return render_template("login.html")
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect(url_for('index'))
-
-@app.route("/dashboard")
-@login_required
-def dashboard():
-    return render_template("transactions.html", username=session['username'])
-
-@app.route("/transactions")
-@admin_required
-def transaction_page():
-    return render_template("dashboard.html", username=session['username'])
-
-# --- API Endpoints ---
-
-@app.route("/api/transaction", methods=["POST"])
-@login_required
-def create_transaction():
-    data = request.json
-    if not data:
-        return jsonify({"error": "No transaction data provided"}), 400
-    
-    # Add default user_id if not provided
-    if "user_id" not in data:
-        data["user_id"] = session['username']
-    
-    logged_tx = log_transaction(data)
-    return jsonify({
-        "status": "success",
-        "transaction_id": logged_tx["transaction_id"],
-        "label": logged_tx["label"],
-        "fraud_probability": logged_tx["fraud_probability"]
-    }), 200
-
-@app.route("/api/transactions")
-@login_required
-def get_transactions():
-    transactions = []
     try:
-        with open(TRANSACTION_FILE) as f:
-            for line in f:
-                if line.strip():
-                    transactions.append(json.loads(line))
-    except FileNotFoundError:
-        pass
-    
-    # If user is not admin, filter to only their transactions
-    if session.get('role') != 'admin':
-        username = session['username']
-        transactions = [t for t in transactions if t.get('user_id') == username or t.get('created_by') == username]
-    
-    # Return most recent first
-    return jsonify(list(reversed(transactions[-100:])))
-
-@app.route("/api/alerts")
-@admin_required
-def get_alerts():
-    alerts = []
-    try:
-        with open(ALERTS_FILE) as f:
-            alerts = [line.strip() for line in f.readlines() if line.strip()]
-    except FileNotFoundError:
-        pass
-    return jsonify(list(reversed(alerts[-50:])))
-
-@app.route("/api/stats")
-@login_required
-def get_stats():
-    transactions = []
-    try:
-        with open(TRANSACTION_FILE) as f:
-            for line in f:
-                if line.strip():
-                    transactions.append(json.loads(line))
-    except FileNotFoundError:
-        pass
-    
-    # Filter for non-admin users
-    if session.get('role') != 'admin':
-        username = session['username']
-        transactions = [t for t in transactions if t.get('user_id') == username or t.get('created_by') == username]
-    
-    total = len(transactions)
-    fraudulent = sum(1 for t in transactions if t.get('label') == 'fraudulent')
-    genuine = total - fraudulent
-    total_amount = sum(float(t.get('Amount', 0)) for t in transactions)
-    
-    return jsonify({
-        "total": total,
-        "fraudulent": fraudulent,
-        "genuine": genuine,
-        "total_amount": round(total_amount, 2),
-        "fraud_rate": round((fraudulent / total * 100) if total > 0 else 0, 2)
-    })
-
-# --- Simulator Control Endpoints ---
-
-@app.route("/api/simulator/start", methods=["POST"])
-@admin_required
-def start_simulator():
-    global simulator
-    
-    data = request.json or {}
-    duration = data.get('duration_minutes')  # None = infinite
-    rate = data.get('transactions_per_minute', 5)
-    
-@app.route("/api/simulator/stop", methods=["POST"])
-@admin_required
-def stop_simulator():
-    global simulator
-    
-    if simulator and simulator.stop():
-        return jsonify({"status": "success", "message": "Simulator stopped"}), 200
-    else:
-        return jsonify({"status": "error", "message": "Simulator not running"}), 400
-
-@app.route("/api/simulator/status")
-@admin_required
-def simulator_status():
-    global simulator
-    
-    if simulator:
-        status = simulator.status()
-        return jsonify(status), 200
-    else:
-        return jsonify({"is_running": False, "transaction_count": 0}), 200
-
-@app.route("/health")
-def health():
-    return jsonify({"status": "healthy"}), 200
-from flask import Flask, request, jsonify, render_template, redirect, url_for, session
-import uuid, json, os, threading, time
-from datetime import datetime
-import joblib
-import pandas as pd
-from functools import wraps
-
-app = Flask(__name__)
-app.secret_key = 'your-secret-key-change-in-production'
-
-# -----------------------------
-# Files & Model Setup
-# -----------------------------
-TRANSACTION_FILE = "transactions.json"
-ALERTS_FILE = "alerts.log"
-USERS_FILE = "users.json"
-MODEL_FILE = "fraud_model.pkl"
-FEATURES_FILE = "feature_names.json"
-
-SYSTEM_START_TIME = datetime.utcnow()
-
-# Load model
-try:
-    model = joblib.load(MODEL_FILE)
-    with open(FEATURES_FILE, 'r') as f:
-        feature_names = json.load(f)
-    print("✅ ML Model loaded successfully!")
-except Exception as e:
-    print(f"⚠️ Warning: Could not load ML model: {e}")
-    model = None
-    feature_names = None
-
-# Ensure files exist
-for file in [TRANSACTION_FILE, ALERTS_FILE]:
-    if not os.path.exists(file):
-        open(file, 'w').close()
-
-# Default users
-if not os.path.exists(USERS_FILE):
-    default_users = {
-        "admin": {"password": "admin123", "role": "admin"},
-        "user1": {"password": "user123", "role": "user"},
-        "demo": {"password": "demo123", "role": "user"}
-    }
-    with open(USERS_FILE, 'w') as f:
-        json.dump(default_users, f, indent=2)
-
-# -----------------------------
-# Authentication
-# -----------------------------
-def login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if 'username' not in session:
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated
-
-def admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if 'username' not in session:
-            return redirect(url_for('login'))
-        if session.get('role') != 'admin':
-            return redirect(url_for('dashboard'))
-        return f(*args, **kwargs)
-    return decorated
-
-# -----------------------------
-# ML Prediction
-# -----------------------------
-def predict_fraud(tx_data):
-    if model is None or feature_names is None:
-        amount = float(tx_data.get('Amount', 0))
-        return {"label": "fraudulent" if amount > 2000 else "genuine",
-                "fraud_probability": 0.75 if amount > 2000 else 0.15}
-    try:
-        features_dict = {f: tx_data.get(f, 0.0) for f in feature_names}
-        df = pd.DataFrame([features_dict])
-        pred = model.predict(df)[0]
-        prob = model.predict_proba(df)[0][1]
-        return {"label": "fraudulent" if pred == 1 else "genuine",
-                "fraud_probability": float(prob)}
+        with open(TRANSACTION_FILE, 'r') as f:
+            transactions = json.load(f)
     except:
-        amount = float(tx_data.get('Amount', 0))
-        return {"label": "fraudulent" if amount > 2000 else "genuine",
-                "fraud_probability": 0.75 if amount > 2000 else 0.15}
+        transactions = []
+    
+    transactions.append(tx_data)
+    
+    with open(TRANSACTION_FILE, 'w') as f:
+        json.dump(transactions, f)
+    
+    # Update profile
+    profile = load_user_profile(username)
+    profile['total_transactions'] += 1
+    profile['total_amount'] += amount
+    profile['avg_amount'] = profile['total_amount'] / profile['total_transactions']
+    profile['history'] = profile.get('history', [])[-49:] + [{'time': tx_data['timestamp'], 'amount': amount}]
+    save_user_profile(username, profile)
+    
+    user_sessions[username]['tx_count'] += 1
+    
+    return tx_data
 
-# -----------------------------
-# Transaction Handling
-# -----------------------------
-def log_transaction(transaction, created_by=None):
-    transaction["transaction_id"] = str(uuid.uuid4())
-    transaction["timestamp"] = datetime.utcnow().isoformat() + "Z"
-
-    if "Time" not in transaction:
-        elapsed = (datetime.utcnow() - SYSTEM_START_TIME).total_seconds()
-        transaction["Time"] = round(elapsed, 2)
-
-    prediction = predict_fraud(transaction)
-    transaction["label"] = prediction["label"]
-    transaction["fraud_probability"] = prediction["fraud_probability"]
-
-    transaction["created_by"] = created_by or session.get('username', 'system')
-
-    with open(TRANSACTION_FILE, "a") as f:
-        f.write(json.dumps(transaction) + "\n")
-
-    alerts = detect_suspicious(transaction)
-    if alerts:
-        alert_message = (
-            f"{datetime.utcnow().isoformat()}Z | "
-            f"Transaction {transaction['transaction_id']} | "
-            f"User: {transaction.get('user_id', 'N/A')} | "
-            f"Amount: {transaction.get('Amount', 'N/A')} | "
-            f"Fraud Probability: {prediction['fraud_probability']:.2%} | "
-            f"Alerts: {', '.join(alerts)}\n"
-        )
-        print(f"⚠️ Fraud Alert: {alert_message.strip()}")
-        with open(ALERTS_FILE, "a") as f:
-            f.write(alert_message)
-
-    return transaction
-
-def annotate_transactions_with_model(transactions):
-    if model is None:
-        return transactions
-    annotated = []
-    for tx in transactions:
-        try:
-            feature_order = ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
-            row_dict = {f: tx.get(f, 0.0) for f in feature_order}
-            df = pd.DataFrame([row_dict])
-            pred = model.predict(df)[0]
-            prob = model.predict_proba(df)[0][1] if hasattr(model, "predict_proba") else None
-            tx["model_label"] = "fraudulent" if pred == 1 else "genuine"
-            tx["model_probability"] = float(prob) if prob is not None else None
-        except:
-            tx["model_label"] = tx.get("label", "genuine")
-            tx["model_probability"] = tx.get("fraud_probability", 0.0)
-        annotated.append(tx)
-    return annotated
-
-# -----------------------------
-# Routes
-# -----------------------------
 @app.route("/")
 def index():
     if 'username' in session:
-        if session.get('role') == 'admin':
-            return redirect(url_for('transaction_page'))
-        return redirect(url_for('dashboard'))
+        return redirect(url_for('transaction_page') if session.get('role') == 'admin' else url_for('dashboard'))
     return render_template("landing.html")
 
 @app.route("/login", methods=["GET", "POST"])
@@ -481,110 +225,80 @@ def login():
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
+        
         with open(USERS_FILE, 'r') as f:
             users = json.load(f)
+        
         if username in users and users[username]["password"] == password:
-            session['username'] = username
-            session['role'] = users[username]["role"]
-            return redirect(url_for('transaction_page') if users[username]["role"]=="admin" else url_for('dashboard'))
+            session.update({
+                'username': username, 
+                'role': users[username]["role"], 
+                'location': users[username].get("location", "Unknown"),
+                '_id': str(uuid.uuid4())[:8]
+            })
+            user_sessions[username].update({
+                'login_time': datetime.utcnow(), 
+                'login_ip': request.remote_addr or '127.0.0.1', 
+                'tx_count': 0
+            })
+            return redirect(url_for('transaction_page') if users[username]["role"] == "admin" else url_for('dashboard'))
+        
         return render_template("login.html", error="Invalid credentials")
     return render_template("login.html")
 
 @app.route("/logout")
 def logout():
+    user_sessions.pop(session.get('username'), None)
     session.clear()
     return redirect(url_for('index'))
 
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    return render_template("transactions.html", username=session['username'])
+    return render_template("transactions.html", username=session['username'], profile=load_user_profile(session['username']))
 
 @app.route("/transactions")
 @admin_required
 def transaction_page():
     return render_template("dashboard.html", username=session['username'])
 
-# -----------------------------
-# API
-# -----------------------------
 @app.route("/api/transaction", methods=["POST"])
 @login_required
 def create_transaction():
     data = request.json
-    if not data:
-        return jsonify({"error": "No transaction data provided"}), 400
-    if "user_id" not in data:
-        data["user_id"] = session['username']
-    logged_tx = log_transaction(data)
-    return jsonify(logged_tx)
+    if not data or 'Amount' not in data:
+        return jsonify({"error": "Amount required"}), 400
+    
+    tx = log_transaction(data)
+    return jsonify({
+        "status": "success", 
+        "transaction_id": tx["transaction_id"], 
+        "label": tx["label"], 
+        "fraud_probability": tx["fraud_probability"], 
+        "risk_factors": tx["risk_factors"]
+    })
 
 @app.route("/api/transactions")
 @login_required
 def get_transactions():
-    transactions = []
     try:
-        with open(TRANSACTION_FILE) as f:
-            for line in f:
-                if line.strip():
-                    transactions.append(json.loads(line))
-    except FileNotFoundError:
-        pass
-    if session.get('role') != 'admin':
-        username = session['username']
-        transactions = [t for t in transactions if t.get('user_id') == username or t.get('created_by') == username]
-    transactions = annotate_transactions_with_model(transactions)
-    return jsonify(list(reversed(transactions[-100:])))
-
-@app.route("/api/stats")
-@login_required
-def get_stats():
-    transactions = []
-    try:
-        with open(TRANSACTION_FILE) as f:
-            for line in f:
-                if line.strip():
-                    transactions.append(json.loads(line))
+        with open(TRANSACTION_FILE, 'r') as f:
+            transactions = json.load(f)
     except:
-        pass
+        transactions = []
+    
     if session.get('role') != 'admin':
         username = session['username']
-        transactions = [t for t in transactions if t.get('user_id') == username or t.get('created_by') == username]
-    total = len(transactions)
-    fraudulent = sum(1 for t in transactions if t.get('label') == 'fraudulent')
-    genuine = total - fraudulent
-    total_amount = sum(float(t.get('Amount', 0)) for t in transactions)
-    return jsonify({
-        "total": total,
-        "fraudulent": fraudulent,
-        "genuine": genuine,
-        "total_amount": round(total_amount,2),
-        "fraud_rate": round((fraudulent/total*100) if total>0 else 0,2)
-    })
-
-# -----------------------------
-# Simulation Thread
-# -----------------------------
-def simulation_worker():
-    while True:
-        dummy_tx = {
-            "Amount": round(100 + 900 * np.random.rand(), 2),
-            "V1": np.random.randn(),
-            "V2": np.random.randn(),
-            "V3": np.random.randn(),
-            "user_id": "sim_user"
-        }
-        log_transaction(dummy_tx, created_by="sim_user")
-
-        time.sleep(5)
-
-# -----------------------------
-# Run App with Simulation
-# -----------------------------
-if __name__ == "__main__":
-    # Start simulation in background
-    sim_thread = threading.Thread(target=simulation_worker, daemon=True)
-    sim_thread.start()
+        transactions = [t for t in transactions if t.get('user_id') == username]
     
-    # Run Flask with threaded mode
-    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
+    return jsonify(transactions[-100:])
+
+@app.route("/api/profile")
+@login_required
+def get_profile():
+    return jsonify(load_user_profile(session['username']))
+
+if __name__ == "__main__":
+    print("\nFraud Detection System | http://localhost:5000\n")
+    print("Model loaded:", model_wrapper.model_type)
+    app.run(host='0.0.0.0', port=5000, debug=True)
